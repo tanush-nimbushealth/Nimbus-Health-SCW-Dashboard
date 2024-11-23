@@ -293,6 +293,7 @@ VM_RESPONSE_WINDOWS = [
 
 # Initialize the Dash app
 app = Dash(__name__)
+server = app.server
 
 # Define the layout of the Dash app
 app.layout = html.Div([
