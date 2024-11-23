@@ -211,7 +211,7 @@ def create_pickup_heatmap(call_data):
 
 def fetch_call_data(selected_days=None, max_retries=5, retry_delay=3):
     """
-    Fetch call data from the API with polling for completion
+    Fetch call data from the API with polling for completion and better error handling
     """
     headers = {
         'Content-Type': 'application/json',
@@ -234,10 +234,12 @@ def fetch_call_data(selected_days=None, max_retries=5, retry_delay=3):
         response = requests.post(f"{BASE_URL}?apikey={API_KEY}", headers=headers, data=payload)
         response.raise_for_status()
         
-        print(f"Initial response status code: {response.status_code}")
-        print(f"Initial response content: {response.text}")
-        
-        request_id = response.json()['request_id']
+        initial_response = response.json()
+        if 'request_id' not in initial_response:
+            print(f"Error: No request_id in response: {initial_response}")
+            return pd.DataFrame()
+            
+        request_id = initial_response['request_id']
         print(f"Got request_id: {request_id}")
         
         # Poll for results
@@ -249,22 +251,33 @@ def fetch_call_data(selected_days=None, max_retries=5, retry_delay=3):
             result_response = requests.get(result_url, headers=headers)
             result_response.raise_for_status()
             
-            print(f"Result response status code: {result_response.status_code}")
-            print(f"Result response content: {result_response.text}")
-            
             result_json = result_response.json()
-            if result_json.get('status') != 'processing':
+            print(f"Response status: {result_json.get('status', 'unknown')}")
+            
+            # Check if job is complete
+            if result_json.get('status') == 'complete':
                 if 'download_url' in result_json:
                     print("\nProcessing complete! Downloading CSV data...")
-                    call_data = pd.read_csv(result_json['download_url'])
-                    print(f"Successfully loaded {len(call_data)} rows of data")
-                    return call_data
+                    try:
+                        call_data = pd.read_csv(result_json['download_url'])
+                        if not call_data.empty:
+                            print(f"Successfully loaded {len(call_data)} rows of data")
+                            return call_data
+                        else:
+                            print("Error: Downloaded CSV is empty")
+                    except Exception as e:
+                        print(f"Error downloading or reading CSV: {str(e)}")
                 else:
-                    print(f"Error: Unexpected response format: {result_json}")
-            else:
+                    print(f"Error: No download_url in complete response: {result_json}")
+            elif result_json.get('status') == 'failed':
+                print(f"Job failed: {result_json.get('error', 'Unknown error')}")
+                break
+            elif result_json.get('status') == 'processing':
                 print(f"Still processing... waiting {retry_delay} seconds")
+            else:
+                print(f"Unknown status: {result_json.get('status', 'unknown')}")
         
-        print("Error: Maximum retries reached while waiting for processing")
+        print("Error: Maximum retries reached or job failed")
         return pd.DataFrame()
         
     except requests.exceptions.RequestException as e:
@@ -299,7 +312,7 @@ server = app.server
 app.layout = html.Div([
     dcc.Store(id='store-data'),
     dcc.Interval(id='interval-component', interval=300000),  # Updates every 5 minutes
-    html.H1("Nimbus Sun City West Dashboard", style={'text-align': 'center'}),
+    html.H1("Nimbus Health - Sun City West Dashboard", style={'text-align': 'center'}),
     dcc.Tabs([
         dcc.Tab(label='Call Volume Heatmap', children=[
             html.Div([
@@ -403,7 +416,7 @@ def update_volume_heatmap(selected_days):
         return create_call_heatmap(processed_data)
     except Exception as e:
         print(f"Error updating volume heatmap: {e}")
-        return px.scatter(title=f"Error updating dashboard: {str(e)}")
+        return px.scatter(title="Error loading data. Please try again later.")
 
 @app.callback(
     Output('pickup-heatmap', 'figure'),
